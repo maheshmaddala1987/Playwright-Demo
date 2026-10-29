@@ -92,7 +92,7 @@ npm install
 ├── package.json
 ├── playwright.config.ts
 ├── package-lock.json
-└── README.md
+├── README.md
 ```
 
 ## Example Snippets
@@ -284,6 +284,236 @@ import { readExcelData } from '../utils/excelReader';
 
 const users = readExcelData<{ username: string; password: string }>('test-data/test-users.xlsx');
 console.log(users[0]);
+```
+
+## Playwright API Test Example
+
+```ts
+import { test, expect, APIRequestContext } from '@playwright/test';
+
+const apiBaseUrl = 'https://fakestoreapi.com';
+
+const authHeaders = {
+  'Content-Type': 'application/json',
+  Accept: 'application/json',
+  Authorization: 'Bearer fake-store-demo-token',
+};
+
+const jsonObjectPayload = {
+  id: 'user-001',
+  name: 'Jane Doe',
+  email: 'jane.doe@example.com',
+};
+
+const jsonFilePayload = JSON.stringify({
+  id: 'user-002',
+  name: 'John Smith',
+  email: 'john.smith@example.com',
+});
+
+const patchPayload = {
+  name: 'Jane Updated',
+  email: 'jane.updated@example.com',
+};
+
+const jsonSchema = {
+  type: 'object',
+  required: ['id', 'name', 'email'],
+  properties: {
+    id: { type: 'string' },
+    name: { type: 'string' },
+    email: { type: 'string' },
+  },
+};
+
+const validateJsonSchema = (value: unknown, schema: any): boolean => {
+  if (!schema || typeof schema !== 'object') {
+    return true;
+  }
+
+  if (schema.type === 'object') {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+      return false;
+    }
+
+    for (const key of schema.required ?? []) {
+      if (!(key in (value as Record<string, unknown>))) {
+        return false;
+      }
+    }
+
+    for (const [key, definition] of Object.entries(schema.properties ?? {})) {
+      if ((value as Record<string, unknown>)[key] !== undefined) {
+        if (!validateJsonSchema((value as Record<string, unknown>)[key], definition)) {
+          return false;
+        }
+      }
+    }
+
+    return true;
+  }
+
+  if (schema.type === 'array') {
+    return Array.isArray(value);
+  }
+
+  if (schema.type === 'string') {
+    return typeof value === 'string';
+  }
+
+  if (schema.type === 'number') {
+    return typeof value === 'number';
+  }
+
+  if (schema.type === 'boolean') {
+    return typeof value === 'boolean';
+  }
+
+  if (schema.type === 'null') {
+    return value === null;
+  }
+
+  return true;
+};
+
+const captureNetwork = async (
+  request: APIRequestContext,
+  method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE',
+  url: string,
+  payload?: any,
+) => {
+  let response;
+  const requestMeta = {
+    method,
+    url,
+    headers: authHeaders,
+    payload,
+  };
+
+  switch (method) {
+    case 'GET':
+      response = await request.get(url, { headers: authHeaders });
+      break;
+    case 'POST':
+      response = await request.post(url, { headers: authHeaders, data: payload });
+      break;
+    case 'PUT':
+      response = await request.put(url, { headers: authHeaders, data: payload });
+      break;
+    case 'PATCH':
+      response = await request.patch(url, { headers: authHeaders, data: payload });
+      break;
+    case 'DELETE':
+      response = await request.delete(url, { headers: authHeaders });
+      break;
+    default:
+      throw new Error(`Unsupported HTTP method: ${method}`);
+  }
+
+  const body = await response.json();
+  const responseMeta = {
+    status: response.status(),
+    headers: response.headers(),
+    body,
+  };
+
+  return { response, body, requestMeta, responseMeta };
+};
+
+test.describe('FakeStore API - CRUD + schema + network capture', () => {
+  test('GET /users/1 should return valid JSON and schema', async ({ request }) => {
+    const url = `${apiBaseUrl}/users/1`;
+    const { response, body } = await captureNetwork(request, 'GET', url);
+
+    expect(response.status()).toBe(200);
+    expect(body).toHaveProperty('id');
+    expect(typeof body.id).toBe('string');
+
+    expect(validateJsonSchema(body, jsonSchema)).toBeTruthy();
+    expect.soft(body.name).toBe(body.name);
+    expect.soft(body.email).toBe(body.email);
+  });
+
+  test('POST /users with JsonObject payload should create a user and validate schema', async ({ request }) => {
+    const url = `${apiBaseUrl}/users`;
+    const { response, body, requestMeta, responseMeta } = await captureNetwork(
+      request,
+      'POST',
+      url,
+      jsonObjectPayload,
+    );
+
+    expect(response.status()).toBe(200);
+    expect(body).toHaveProperty('id');
+    expect(typeof body.id).toBe('string');
+
+    expect(validateJsonSchema(body, jsonSchema)).toBeTruthy();
+
+    expect.soft(body.name).toBe(jsonObjectPayload.name);
+    expect.soft(body.email).toBe(jsonObjectPayload.email);
+
+    expect(requestMeta.method).toBe('POST');
+    expect(responseMeta.status).toBe(200);
+    expect(responseMeta.body).toEqual(body);
+  });
+
+  test('PUT /users/1 with JsonFile payload should update a user and validate schema', async ({ request }) => {
+    const url = `${apiBaseUrl}/users/1`;
+    const { response, body, requestMeta, responseMeta } = await captureNetwork(
+      request,
+      'PUT',
+      url,
+      jsonFilePayload,
+    );
+
+    expect(response.status()).toBe(200);
+    expect(body).toHaveProperty('id');
+    expect(typeof body.id).toBe('string');
+
+    expect(validateJsonSchema(body, jsonSchema)).toBeTruthy();
+
+    const jsonFileObject = JSON.parse(jsonFilePayload);
+
+    expect.soft(body.name).toBe(jsonFileObject.name);
+    expect.soft(body.email).toBe(jsonFileObject.email);
+
+    expect(requestMeta.method).toBe('PUT');
+    expect(responseMeta.status).toBe(200);
+    expect(responseMeta.body).toEqual(body);
+  });
+
+  test('PATCH /users/1 should partially update a user and validate schema', async ({ request }) => {
+    const url = `${apiBaseUrl}/users/1`;
+    const { response, body } = await captureNetwork(request, 'PATCH', url, patchPayload);
+
+    expect(response.status()).toBe(200);
+    expect(body).toHaveProperty('id');
+    expect(typeof body.id).toBe('string');
+
+    expect(validateJsonSchema(body, jsonSchema)).toBeTruthy();
+
+    expect.soft(body.name).toBe(patchPayload.name);
+    expect.soft(body.email).toBe(patchPayload.email);
+  });
+
+  test('DELETE /users/1 should remove the user and validate schema', async ({ request }) => {
+    const url = `${apiBaseUrl}/users/1`;
+    const { response, body, requestMeta, responseMeta } = await captureNetwork(
+      request,
+      'DELETE',
+      url,
+    );
+
+    expect(response.status()).toBe(200);
+    expect(body).toHaveProperty('id');
+    expect(typeof body.id).toBe('string');
+
+    expect(validateJsonSchema(body, jsonSchema)).toBeTruthy();
+
+    expect(requestMeta.method).toBe('DELETE');
+    expect(responseMeta.status).toBe(200);
+  });
+});
 ```
 
 ## Getting Started
