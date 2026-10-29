@@ -22,6 +22,44 @@ It includes examples for common UI automation patterns such as:
 - Faker
 - CSV / Excel parsing utilities
 
+## Dependencies
+
+This project uses the following dependencies and dev dependencies:
+
+```bash
+npm install
+```
+
+```json
+{
+  "devDependencies": {
+    "@faker-js/faker": "^9.9.0",
+    "@playwright/test": "^1.64.1",
+    "@types/node": "^26.6.5",
+    "cross-env": "^10.1.0",
+    "dotenv": "^18.0.9"
+  },
+  "dependencies": {
+    "@types/luxon": "^3.7.6",
+    "ajv": "^8.20.0",
+    "csv-parse": "^7.0.3",
+    "luxon": "^3.7.2",
+    "xlsx": "^0.18.5"
+  }
+}
+```
+
+### Dependency overview
+
+- `@playwright/test` – Playwright testing framework
+- `dotenv` – Load environment variables from `.env` files
+- `cross-env` – Set environment variables across OS platforms
+- `csv-parse` – Read CSV files for data-driven test inputs
+- `xlsx` – Read Excel workbook data
+- `ajv` – JSON schema validation support
+- `luxon` and `@types/luxon` – Date/time utilities
+- `@faker-js/faker` – Generate fake test data
+
 ## Project Structure
 
 ```text
@@ -55,6 +93,197 @@ It includes examples for common UI automation patterns such as:
 ├── playwright.config.ts
 ├── package-lock.json
 └── README.md
+```
+
+## Example Snippets
+
+### 1) Page Object Model (POM)
+
+Base page and login page example:
+
+```ts
+// pages/BasePage.ts
+import { Page, Locator, expect } from '@playwright/test';
+
+export class BasePage {
+  protected readonly page: Page;
+
+  constructor(page: Page) {
+    this.page = page;
+  }
+
+  async navigateTo(path: string): Promise<void> {
+    await this.page.goto(path);
+  }
+
+  async getPageTitle(): Promise<string> {
+    return await this.page.title();
+  }
+
+  async waitForElementToBeVisible(locator: Locator): Promise<void> {
+    await expect(locator).toBeVisible();
+  }
+}
+```
+
+```ts
+// pages/LoginPage.ts
+import { Page, Locator } from '@playwright/test';
+import { BasePage } from './BasePage';
+
+export class LoginPage extends BasePage {
+  private readonly usernameInput: Locator;
+  private readonly passwordInput: Locator;
+  private readonly loginButton: Locator;
+
+  constructor(page: Page) {
+    super(page);
+    this.usernameInput = page.getByRole('textbox', { name: 'Username' });
+    this.passwordInput = page.getByRole('textbox', { name: 'Password' });
+    this.loginButton = page.getByRole('button', { name: 'Login' });
+  }
+
+  async login(username: string, password: string): Promise<void> {
+    await this.usernameInput.fill(username);
+    await this.passwordInput.fill(password);
+    await this.loginButton.click();
+  }
+
+  async navigateTo(): Promise<void> {
+    await this.page.goto('https://www.saucedemo.com/');
+  }
+}
+```
+
+### 2) Playwright Fixture Example
+
+```ts
+import { test as base, expect } from '@playwright/test';
+import { LoginPage } from '../pages/LoginPage';
+import { HomePage } from '../pages/HomePage';
+
+interface LoginData {
+  loginPage: LoginPage;
+  homePage: HomePage;
+}
+
+export const test = base.extend<LoginData>({
+  loginPage: async ({ page }, use) => {
+    await use(new LoginPage(page));
+  },
+
+  homePage: async ({ loginPage, page }, use) => {
+    await use(new HomePage(page));
+  },
+});
+
+export { expect };
+```
+
+This pattern allows page objects to be reused across tests and promotes cleaner setup.
+
+### 3) Read Test Data from CSV
+
+```ts
+import fs from 'node:fs';
+import path from 'node:path';
+import { parse } from 'csv-parse/sync';
+
+export function readCsvData<T>(relativeFilePath: string): T[] {
+  const absolutePath = path.resolve(process.cwd(), relativeFilePath);
+
+  if (!fs.existsSync(absolutePath)) {
+    throw new Error(`CSV file not found at path: ${absolutePath}`);
+  }
+
+  const fileContent = fs.readFileSync(absolutePath, 'utf-8');
+
+  return parse(fileContent, {
+    columns: true,
+    skip_empty_lines: true,
+    trim: true,
+  }) as T[];
+}
+```
+
+Example usage:
+
+```ts
+import { readCsvData } from '../utils/csvReader';
+
+const users = readCsvData<{ username: string; password: string }>('test-data/loginData.csv');
+
+for (const user of users) {
+  console.log(user.username, user.password);
+}
+```
+
+### 4) Read Test Data from JSON
+
+```ts
+import * as fs from 'fs';
+import * as path from 'path';
+
+export function readJsonArray<T>(relativeFilePath: string): T[] {
+  try {
+    const absolutePath = path.resolve(process.cwd(), relativeFilePath);
+    const rawData = fs.readFileSync(absolutePath, 'utf-8');
+    const parsedData = JSON.parse(rawData);
+
+    if (!Array.isArray(parsedData)) {
+      throw new Error(`Data in ${relativeFilePath} is not a valid JSON array.`);
+    }
+
+    return parsedData as T[];
+  } catch (error) {
+    console.error(`Failed to read JSON array from ${relativeFilePath}:`, error);
+    throw error;
+  }
+}
+```
+
+Example usage:
+
+```ts
+import { readJsonArray } from '../utils/jsonReader';
+
+const users = readJsonArray<{ name: string; email: string }>('test-data/users.json');
+console.log(users[0]);
+```
+
+### 5) Read Test Data from Excel
+
+```ts
+import * as xlsx from 'xlsx';
+import * as path from 'path';
+import * as fs from 'fs';
+
+export function readExcelData<T>(filePath: string, sheetName?: string): T[] {
+  const absolutePath = path.resolve(process.cwd(), filePath);
+
+  if (!fs.existsSync(absolutePath)) {
+    throw new Error(`Excel file not found at: ${absolutePath}`);
+  }
+
+  const workbook = xlsx.readFile(absolutePath);
+  const targetSheetName = sheetName || workbook.SheetNames[0];
+  const worksheet = workbook.Sheets[targetSheetName];
+
+  if (!worksheet) {
+    throw new Error(`Sheet named "${targetSheetName}" was not found in the workbook.`);
+  }
+
+  return xlsx.utils.sheet_to_json(worksheet) as T[];
+}
+```
+
+Example usage:
+
+```ts
+import { readExcelData } from '../utils/excelReader';
+
+const users = readExcelData<{ username: string; password: string }>('test-data/test-users.xlsx');
+console.log(users[0]);
 ```
 
 ## Getting Started
